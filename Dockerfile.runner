@@ -1,0 +1,27 @@
+FROM ghcr.io/actions/actions-runner:2.338.0
+
+USER root
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       git \
+       jq \
+       python3 \
+       python3-venv \
+       openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/ansible \
+    && /opt/ansible/bin/pip install --no-cache-dir \
+       ansible-core \
+       yamllint \
+       requests
+
+ENV PATH="/opt/ansible/bin:${PATH}"
+ENV ANSIBLE_COLLECTIONS_PATH="/opt/ansible/collections"
+
+RUN ansible-galaxy collection install \
+    community.docker \
+    -p /opt/ansible/collections
+
+USER runner

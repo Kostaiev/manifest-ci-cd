@@ -1,0 +1,7 @@
+---
+- name: Test Grafana deployment
+  hosts: managed_linux
+  gather_facts: false
+
+  roles:
+    - grafana

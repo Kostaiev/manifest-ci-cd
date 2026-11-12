@@ -1,0 +1,6 @@
+---
+- name: Deploy Grafana test
+  ansible.builtin.copy:
+    dest: /tmp/ansible-ci-lab-grafana.txt
+    content: "grafana deployed "
+    mode: "0644"

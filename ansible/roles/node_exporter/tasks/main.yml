@@ -1,0 +1,6 @@
+---
+- name: Deploy Node Exporter test
+  ansible.builtin.copy:
+    dest: /tmp/ansible-ci-lab-node-exporter.txt
+    content: "node-exporter deployed"
+    mode: "0644"

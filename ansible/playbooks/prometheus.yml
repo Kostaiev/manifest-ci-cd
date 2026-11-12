@@ -1,0 +1,10 @@
+---
+- name: Test Prometheus deployment
+  hosts: managed_linux
+  gather_facts: false
+
+  roles:
+    - prometheus
+  tags:
+    - test
+    - test4

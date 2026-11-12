@@ -1,0 +1,54 @@
+name: Ansible CI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: [self-hosted, linux, ansible-lab]
+
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect changes
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ github.ref }}
+          filters: .github/filters.yml
+
+      - name: Resolve dependencies
+        id: plan
+        env:
+          CHANGED: ${{ steps.filter.outputs.changes }}
+        run: |
+          plan=$(bash .github/scripts/plan.sh "$CHANGED")
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: detect
+    if: needs.detect.outputs.plan != '[]'
+
+    uses: ./.github/workflows/validate.yml
+    with:
+      plan: ${{ needs.detect.outputs.plan }}
+    secrets: inherit
+
+  deploy:
+    needs: [detect, validate]
+    if: needs.validate.result == 'success'
+
+    uses: ./.github/workflows/deploy.yml
+    with:
+      plan: ${{ needs.detect.outputs.plan }}
+    secrets: inherit

@@ -1,0 +1,20 @@
+services:
+  runner:
+    build: .
+    image: ansible-runner:lab
+    restart: unless-stopped
+
+    environment:
+      GH_REPO_URL: ${GH_REPO_URL:?Required}
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      - runner_home:/home/runner
+
+    working_dir: /home/runner
+    command: ["./run.sh"]
+
+volumes:
+  runner_home:

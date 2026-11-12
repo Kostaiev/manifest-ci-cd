@@ -1,0 +1,11 @@
+node-exporter:
+  - "ansible/roles/node_exporter/**"
+  - "ansible/playbooks/node-exporter.yml"
+
+prometheus:
+  - "ansible/roles/prometheus/**"
+  - "ansible/playbooks/prometheus.yml"
+
+grafana:
+  - "ansible/roles/grafana/**"
+  - "ansible/playbooks/grafana.yml"

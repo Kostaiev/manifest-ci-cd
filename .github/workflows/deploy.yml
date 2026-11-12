@@ -1,0 +1,81 @@
+name: Ansible Deploy
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      components:
+        description: "CSV: node-exporter,prometheus,grafana"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ansible-vm-lab-deploy
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, ansible-lab]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Deploy Ansible
+        env:
+          PLAN: ${{ inputs.plan }}
+          COMPONENTS: ${{ inputs.components }}
+          SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            selected=$(jq -nc --arg csv "$COMPONENTS" '
+              $csv | split(",")
+              | map(gsub("^\\s+|\\s+$"; ""))
+              | map(select(length > 0))
+            ')
+
+            PLAN=$(bash .github/scripts/plan.sh "$selected")
+          fi
+
+          jq -e 'type == "array" and length > 0' \
+            <<< "$PLAN" > /dev/null
+
+          : "${SSH_KEY:?Missing ANSIBLE_SSH_KEY}"
+
+          umask 077
+          key="$RUNNER_TEMP/ansible_key"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+
+          export ANSIBLE_PRIVATE_KEY_FILE="$key"
+          export ANSIBLE_ROLES_PATH="$PWD/ansible/roles"
+          export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/.github/ssh_known_hosts"
+
+          inventory="ansible/inventory/lab/hosts.yml"
+
+          while IFS= read -r id; do
+            playbook=$(jq -er \
+              --arg id "$id" \
+              '.components[$id].playbook' \
+              .github/components.json)
+
+            echo "Deploying: $id"
+
+            ansible-playbook \
+              -i "$inventory" \
+              "$playbook"
+
+          done < <(jq -r '.[]' <<< "$PLAN")

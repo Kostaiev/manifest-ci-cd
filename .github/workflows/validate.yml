@@ -1,0 +1,111 @@
+name: Ansible Validate
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, linux, ansible-lab]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate SSH connection
+        env:
+          SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
+
+        run: |
+          set -euo pipefail
+
+          : "${SSH_KEY:?Missing SSH key}"
+
+          umask 077
+          key=$(mktemp "$RUNNER_TEMP/ansible-key.XXXXXX")
+          trap 'rm -f "$key"' EXIT
+
+          printf '%s\n' "$SSH_KEY" > "$key"
+
+          export ANSIBLE_PRIVATE_KEY_FILE="$key"
+
+          export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/.github/ssh_known_hosts"
+
+          ssh \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$PWD/.github/ssh_known_hosts" \
+            bot@host.docker.internal \
+            'whoami && hostname'
+
+          ansible \
+            -i ansible/inventory/lab/hosts.yml \
+            managed_linux \
+            -m ansible.builtin.ping
+
+      - name: Validate Ansible
+        env:
+          PLAN: ${{ inputs.plan }}
+          SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          # SSH configuration
+          : "${SSH_KEY:?Missing ANSIBLE_SSH_KEY}"
+
+          umask 077
+          key=$(mktemp "$RUNNER_TEMP/ansible-key.XXXXXX")
+          trap 'rm -f "$key"' EXIT
+
+          printf '%s\n' "$SSH_KEY" > "$key"
+
+          export ANSIBLE_PRIVATE_KEY_FILE="$key"
+          export ANSIBLE_ROLES_PATH="$PWD/ansible/roles"
+          export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/.github/ssh_known_hosts"
+
+          inventory="ansible/inventory/lab/hosts.yml"
+
+          # 1. Cheap validation
+          while IFS= read -r id; do
+            playbook=$(jq -er \
+              --arg id "$id" \
+              '.components[$id].playbook' \
+              .github/components.json)
+
+            role="ansible/roles/${id//-/_}"
+
+            yamllint "$playbook" "$role"
+
+            ansible-playbook \
+              -i "$inventory" \
+              --syntax-check "$playbook"
+
+          done < <(jq -r '.[]' <<< "$PLAN")
+
+          # 2. Connectivity
+          ansible-inventory -i "$inventory" --list |
+            jq -e '.managed_linux.hosts | length > 0' > /dev/null
+
+          ansible -i "$inventory" managed_linux \
+            -m ansible.builtin.ping
+
+          # 3. Dry run
+          while IFS= read -r id; do
+            playbook=$(jq -er \
+              --arg id "$id" \
+              '.components[$id].playbook' \
+              .github/components.json)
+
+            ansible-playbook \
+              -i "$inventory" \
+              --check --diff "$playbook"
+
+          done < <(jq -r '.[]' <<< "$PLAN")

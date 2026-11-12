@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "components": {
+    "node-exporter": {
+      "playbook": "ansible/playbooks/node-exporter.yml",
+      "depends_on": []
+    },
+    "prometheus": {
+      "playbook": "ansible/playbooks/prometheus.yml",
+      "depends_on": ["node-exporter"]
+    },
+    "grafana": {
+      "playbook": "ansible/playbooks/grafana.yml",
+      "depends_on": ["prometheus"]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+---
+- name: Deploy Prometheus test
+  ansible.builtin.copy:
+    dest: /tmp/ansible-ci-lab-prometheus.txt
+    content: "prometheus deployed"
+    mode: "0644"
