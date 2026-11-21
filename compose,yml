@@ -12,6 +12,7 @@ services:
 
     volumes:
       - runner_home:/home/runner
+      - /srv/github-actions/state:/ci-state
 
     working_dir: /home/runner
     command: ["./run.sh"]

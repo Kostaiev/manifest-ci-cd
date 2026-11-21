@@ -1,20 +1,21 @@
 name: Code Review
 
 on:
-  workflow_call:
+  workflow_run:
+    workflows: ["Ansible Validate"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   review:
+    if: github.event.workflow_run.conclusion == 'success'
+
     runs-on: [self-hosted, linux, ansible-lab]
 
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Code Review
         run: |
           echo "Starting Code Review"

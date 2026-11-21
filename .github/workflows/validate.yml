@@ -1,6 +1,11 @@
 name: Ansible Validate
 
 on:
+  workflow_run:
+    workflows: ["Ansible CI"]
+    types: [completed]
+    branches: [main]
+
   workflow_call:
 
 permissions:
@@ -8,56 +13,99 @@ permissions:
 
 jobs:
   validate:
+    if: >-
+      ${{
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      }}
+
     runs-on: [self-hosted, linux, ansible-lab]
 
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify CI plan
+        if: github.event_name == 'workflow_run'
+        env:
+          CI_ID: ${{ github.event.workflow_run.id }}
+          CI_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+          file="/ci-state/pending/${CI_ID}-${CI_ATTEMPT}.json"
+
+          test -s "$file"
+
+          jq -e 'type == "array" and all(.[]; type == "string")' \
+            "$file" > /dev/null
 
       - name: YAML lint
         working-directory: ansible
-        run: |
-          yamllint -c ../.yamllint .
+        run: yamllint -c ../.yamllint .
 
       - name: Validate all playbooks
         working-directory: ansible
-
         env:
           SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
-
         run: |
           set -euo pipefail
 
           : "${SSH_KEY:?Missing ANSIBLE_SSH_KEY}"
 
           umask 077
-
           key=$(mktemp "$RUNNER_TEMP/ansible-key.XXXXXX")
           trap 'rm -f "$key"' EXIT
 
           printf '%s\n' "$SSH_KEY" > "$key"
-
           export ANSIBLE_PRIVATE_KEY_FILE="$key"
 
-          # Check inventory
           ansible-inventory --list |
             jq -e '.managed_linux.hosts | length > 0' \
             > /dev/null
 
-          # Syntax + Check mode for every playbook
-          jq -r '.components[].playbook' \
-            ../.github/components.json |
+          jq -r '.components[].playbook' ../.github/components.json |
           while IFS= read -r playbook; do
 
             playbook="${playbook#ansible/}"
 
-            echo "Validating: $playbook"
-
-            ansible-playbook \
-              --syntax-check "$playbook"
-
-            ansible-playbook \
-              --check "$playbook"
+            ansible-playbook --syntax-check "$playbook"
+            ansible-playbook --check "$playbook"
 
           done
+
+      - name: Publish validated plan
+        if: github.event_name == 'workflow_run'
+        env:
+          CI_ID: ${{ github.event.workflow_run.id }}
+          CI_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+          source="/ci-state/pending/${CI_ID}-${CI_ATTEMPT}.json"
+
+          dest_dir="/ci-state/validated/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${SOURCE_SHA}"
+
+          mkdir -p "$dest_dir"
+
+          tmp=$(mktemp "$dest_dir/.plan.XXXXXX")
+          trap 'rm -f "$tmp"' EXIT
+
+          cp "$source" "$tmp"
+
+          dest="$dest_dir/${SOURCE_SHA:0:4}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+
+          mv "$tmp" "$dest"

@@ -11,9 +11,6 @@ jobs:
   detect:
     runs-on: [self-hosted, linux, ansible-lab]
 
-    outputs:
-      changed: ${{ steps.filter.outputs.changes }}
-
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,23 +27,13 @@ jobs:
               and ($c | type == "object" and length > 0)
               and all($c | to_entries[];
                 (.key | test("^[a-z0-9-]+$"))
-                and
-                (.value.paths |
-                  type == "array"
-                  and length > 0
-                  and all(.[];
-                    type == "string" and length > 0
-                  )
-                )
-                and
-                (.value.playbook |
+                and (.value.paths |
+                  type == "array" and length > 0
+                  and all(.[]; type == "string" and length > 0))
+                and (.value.playbook |
                   type == "string"
                   and startswith("ansible/playbooks/")
-                  and (
-                    endswith(".yml")
-                    or endswith(".yaml")
-                  )
-                )
+                  and (endswith(".yml") or endswith(".yaml")))
               )
           ' .github/components.json > /dev/null
 
@@ -73,31 +60,21 @@ jobs:
           base: ${{ github.ref }}
           filters: ${{ steps.build.outputs.filters }}
 
-  validate:
-    needs: detect
+      - name: Save plan to shared storage
+        env:
+          CHANGED: ${{ steps.filter.outputs.changes }}
+        run: |
+          set -euo pipefail
 
-    uses: ./.github/workflows/validate.yml
-    secrets: inherit
+          jq -e 'type == "array" and all(.[]; type == "string")' \
+            <<< "$CHANGED" > /dev/null
 
-  deploy:
-    needs: [detect, validate]
+          mkdir -p /ci-state/pending
 
-    if: >-
-      ${{
-        needs.validate.result == 'success' &&
-        needs.detect.outputs.changed != '[]'
-      }}
+          tmp=$(mktemp /ci-state/pending/.plan.XXXXXX)
+          trap 'rm -f "$tmp"' EXIT
 
-    uses: ./.github/workflows/deploy.yml
+          printf '%s\n' "$CHANGED" > "$tmp"
 
-    with:
-      components: ${{ needs.detect.outputs.changed }}
-
-    secrets: inherit
-
-  review:
-    needs: validate
-
-    if: needs.validate.result == 'success'
-
-    uses: ./.github/workflows/review.yml
+          mv "$tmp" \
+            "/ci-state/pending/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
