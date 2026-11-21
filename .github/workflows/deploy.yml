@@ -3,28 +3,114 @@ name: Ansible Deploy
 on:
   workflow_call:
     inputs:
-      plan:
+      components:
         required: true
         type: string
 
   workflow_dispatch:
     inputs:
-      components:
-        description: "CSV: node-exporter,prometheus,grafana"
+      component:
+        description: "Select component"
         required: true
-        type: string
+        type: choice
+        default: all
+        options:
+          - all
+          - node-exporter
+          - prometheus
+          - grafana
 
 permissions:
   contents: read
 
 concurrency:
-  group: ansible-vm-lab-deploy
+  group: ansible-lab-deploy
   cancel-in-progress: false
   queue: max
 
 jobs:
+  prepare:
+    runs-on: [self-hosted, linux, ansible-lab]
+
+    outputs:
+      components: ${{ steps.select.outputs.components }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Select components
+        id: select
+
+        env:
+          AUTO: ${{ inputs.components }}
+          MANUAL: ${{ inputs.component }}
+
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+
+            if [[ "$MANUAL" == "all" ]]; then
+              selected=$(jq -c \
+                '.components | keys' \
+                .github/components.json)
+            else
+              selected=$(jq -nc \
+                --arg id "$MANUAL" \
+                '[$id]')
+            fi
+
+          else
+            selected="$AUTO"
+          fi
+
+          jq -e --argjson ids "$selected" '
+            .components as $c
+            | ($ids |
+                type == "array"
+                and length > 0
+                and all(.[];
+                  type == "string" and ($c[.] != null)
+                )
+              )
+          ' .github/components.json > /dev/null
+
+          components=$(jq -c 'unique' <<< "$selected")
+
+          echo "components=$components" >> "$GITHUB_OUTPUT"
+
+  validate:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      }}
+
+    uses: ./.github/workflows/validate.yml
+    secrets: inherit
+
   deploy:
-    if: github.ref == 'refs/heads/main'
+    needs: [prepare, validate]
+
+    if: >-
+      ${{
+        !cancelled() &&
+        github.ref == 'refs/heads/main' &&
+        needs.prepare.result == 'success' &&
+        (
+          github.event_name != 'workflow_dispatch' ||
+          needs.validate.result == 'success'
+        )
+      }}
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        component: ${{ fromJSON(needs.prepare.outputs.components) }}
+
     runs-on: [self-hosted, linux, ansible-lab]
 
     steps:
@@ -32,50 +118,34 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Deploy Ansible
+      - name: Deploy component
+        working-directory: ansible
+
         env:
-          PLAN: ${{ inputs.plan }}
-          COMPONENTS: ${{ inputs.components }}
+          COMPONENT: ${{ matrix.component }}
           SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
+
         run: |
           set -euo pipefail
-
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            selected=$(jq -nc --arg csv "$COMPONENTS" '
-              $csv | split(",")
-              | map(gsub("^\\s+|\\s+$"; ""))
-              | map(select(length > 0))
-            ')
-
-            PLAN=$(bash .github/scripts/plan.sh "$selected")
-          fi
-
-          jq -e 'type == "array" and length > 0' \
-            <<< "$PLAN" > /dev/null
 
           : "${SSH_KEY:?Missing ANSIBLE_SSH_KEY}"
 
           umask 077
-          key="$RUNNER_TEMP/ansible_key"
-          printf '%s\n' "$SSH_KEY" > "$key"
+
+          key=$(mktemp "$RUNNER_TEMP/ansible-key.XXXXXX")
           trap 'rm -f "$key"' EXIT
 
+          printf '%s\n' "$SSH_KEY" > "$key"
+
           export ANSIBLE_PRIVATE_KEY_FILE="$key"
-          export ANSIBLE_ROLES_PATH="$PWD/ansible/roles"
-          export ANSIBLE_SSH_COMMON_ARGS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/.github/ssh_known_hosts"
 
-          inventory="ansible/inventory/lab/hosts.yml"
+          playbook=$(jq -er \
+            --arg id "$COMPONENT" \
+            '.components[$id].playbook' \
+            ../.github/components.json)
 
-          while IFS= read -r id; do
-            playbook=$(jq -er \
-              --arg id "$id" \
-              '.components[$id].playbook' \
-              .github/components.json)
+          playbook="${playbook#ansible/}"
 
-            echo "Deploying: $id"
+          echo "Deploying: $COMPONENT"
 
-            ansible-playbook \
-              -i "$inventory" \
-              "$playbook"
-
-          done < <(jq -r '.[]' <<< "$PLAN")
+          ansible-playbook "$playbook"

@@ -12,7 +12,7 @@ jobs:
     runs-on: [self-hosted, linux, ansible-lab]
 
     outputs:
-      plan: ${{ steps.plan.outputs.plan }}
+      changed: ${{ steps.filter.outputs.changes }}
 
     steps:
       - uses: actions/checkout@v7
@@ -20,35 +20,84 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Validate components.json
+        run: |
+          set -euo pipefail
+
+          jq -e '
+            .components as $c
+            | .version == 1
+              and ($c | type == "object" and length > 0)
+              and all($c | to_entries[];
+                (.key | test("^[a-z0-9-]+$"))
+                and
+                (.value.paths |
+                  type == "array"
+                  and length > 0
+                  and all(.[];
+                    type == "string" and length > 0
+                  )
+                )
+                and
+                (.value.playbook |
+                  type == "string"
+                  and startswith("ansible/playbooks/")
+                  and (
+                    endswith(".yml")
+                    or endswith(".yaml")
+                  )
+                )
+              )
+          ' .github/components.json > /dev/null
+
+          jq -r '.components[].playbook' \
+            .github/components.json |
+          while IFS= read -r playbook; do
+            test -f "$playbook"
+          done
+
+      - name: Build path filters
+        id: build
+        run: |
+          filters=$(jq -c '
+            .components |
+            with_entries(.value = .value.paths)
+          ' .github/components.json)
+
+          echo "filters=$filters" >> "$GITHUB_OUTPUT"
+
       - name: Detect changes
         id: filter
         uses: dorny/paths-filter@v4
         with:
           base: ${{ github.ref }}
-          filters: .github/filters.yml
-
-      - name: Resolve dependencies
-        id: plan
-        env:
-          CHANGED: ${{ steps.filter.outputs.changes }}
-        run: |
-          plan=$(bash .github/scripts/plan.sh "$CHANGED")
-          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          filters: ${{ steps.build.outputs.filters }}
 
   validate:
     needs: detect
-    if: needs.detect.outputs.plan != '[]'
 
     uses: ./.github/workflows/validate.yml
-    with:
-      plan: ${{ needs.detect.outputs.plan }}
     secrets: inherit
 
   deploy:
     needs: [detect, validate]
-    if: needs.validate.result == 'success'
+
+    if: >-
+      ${{
+        needs.validate.result == 'success' &&
+        needs.detect.outputs.changed != '[]'
+      }}
 
     uses: ./.github/workflows/deploy.yml
+
     with:
-      plan: ${{ needs.detect.outputs.plan }}
+      components: ${{ needs.detect.outputs.changed }}
+
     secrets: inherit
+
+  review:
+    needs: validate
+
+    if: needs.validate.result == 'success'
+
+    uses: ./.github/workflows/review.yml

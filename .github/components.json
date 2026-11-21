@@ -2,16 +2,25 @@
   "version": 1,
   "components": {
     "node-exporter": {
-      "playbook": "ansible/playbooks/node-exporter.yml",
-      "depends_on": []
+      "paths": [
+        "ansible/roles/node_exporter/**",
+        "ansible/playbooks/node-exporter.yml"
+      ],
+      "playbook": "ansible/playbooks/node-exporter.yml"
     },
     "prometheus": {
-      "playbook": "ansible/playbooks/prometheus.yml",
-      "depends_on": ["node-exporter"]
+      "paths": [
+        "ansible/roles/prometheus/**",
+        "ansible/playbooks/prometheus.yml"
+      ],
+      "playbook": "ansible/playbooks/prometheus.yml"
     },
     "grafana": {
-      "playbook": "ansible/playbooks/grafana.yml",
-      "depends_on": ["prometheus"]
+      "paths": [
+        "ansible/roles/grafana/**",
+        "ansible/playbooks/grafana.yml"
+      ],
+      "playbook": "ansible/playbooks/grafana.yml"
     }
   }
 }

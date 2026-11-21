@@ -1,0 +1,23 @@
+name: Code Review
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: [self-hosted, linux, ansible-lab]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Code Review
+        run: |
+          echo "Starting Code Review"
+
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Commit: $GITHUB_SHA"
