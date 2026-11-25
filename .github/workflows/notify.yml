@@ -1,0 +1,36 @@
+name: Telegram Notify
+
+on:
+  workflow_call:
+    inputs:
+      message:
+        required: true
+        type: string
+
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: true
+      TELEGRAM_CHAT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Send notification
+        env:
+          MESSAGE: ${{ inputs.message }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: |
+          bash .github/scripts/notify-telegram.sh ||
+            echo "::warning::Telegram notification failed"

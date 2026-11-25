@@ -4,15 +4,40 @@ on:
   push:
     branches: [main]
 
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Select component"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - node-exporter
+          - prometheus
+          - grafana
+
 permissions:
   contents: read
 
 jobs:
+  notify-start:
+    uses: ./.github/workflows/notify.yml
+    with:
+      message: |
+        🚀 Ansible pipeline started
+        Event: ${{ github.event_name }}
+        Commit: ${{ github.sha }}
+        Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    secrets:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
   detect:
-    runs-on: [self-hosted, linux, ansible-lab]
+    runs-on: ubuntu-24.04
 
     outputs:
-      changed: ${{ steps.filter.outputs.changes }}
+      components: ${{ steps.select.outputs.components }}
 
     steps:
       - uses: actions/checkout@v7
@@ -20,43 +45,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate components.json
-        run: |
-          set -euo pipefail
-
-          jq -e '
-            .components as $c
-            | .version == 1
-              and ($c | type == "object" and length > 0)
-              and all($c | to_entries[];
-                (.key | test("^[a-z0-9-]+$"))
-                and
-                (.value.paths |
-                  type == "array"
-                  and length > 0
-                  and all(.[];
-                    type == "string" and length > 0
-                  )
-                )
-                and
-                (.value.playbook |
-                  type == "string"
-                  and startswith("ansible/playbooks/")
-                  and (
-                    endswith(".yml")
-                    or endswith(".yaml")
-                  )
-                )
-              )
-          ' .github/components.json > /dev/null
-
-          jq -r '.components[].playbook' \
-            .github/components.json |
-          while IFS= read -r playbook; do
-            test -f "$playbook"
-          done
-
       - name: Build path filters
+        if: github.event_name == 'push'
         id: build
         run: |
           filters=$(jq -c '
@@ -67,37 +57,61 @@ jobs:
           echo "filters=$filters" >> "$GITHUB_OUTPUT"
 
       - name: Detect changes
+        if: github.event_name == 'push'
         id: filter
         uses: dorny/paths-filter@v4
         with:
           base: ${{ github.ref }}
           filters: ${{ steps.build.outputs.filters }}
 
-  validate:
-    needs: detect
+      - name: Select components
+        id: select
+        env:
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          bash .github/scripts/ci-select-components.sh
 
+  validate:
     uses: ./.github/workflows/validate.yml
     secrets: inherit
 
   deploy:
     needs: [detect, validate]
-
     if: >-
       ${{
+        github.ref == 'refs/heads/main' &&
         needs.validate.result == 'success' &&
-        needs.detect.outputs.changed != '[]'
+        needs.detect.outputs.components != '[]'
       }}
 
     uses: ./.github/workflows/deploy.yml
-
     with:
-      components: ${{ needs.detect.outputs.changed }}
-
+      components: ${{ needs.detect.outputs.components }}
     secrets: inherit
 
   review:
     needs: validate
-
     if: needs.validate.result == 'success'
-
     uses: ./.github/workflows/review.yml
+
+  notify-end:
+    needs: [notify-start, detect, validate, deploy, review]
+    if: ${{ always() }}
+
+    uses: ./.github/workflows/notify.yml
+    with:
+      message: |
+        ${{ contains(needs.*.result, 'failure') &&
+         '❌ Ansible pipeline FAILED' ||
+          contains(needs.*.result, 'cancelled') &&
+           '🚫 Ansible pipeline CANCELLED' ||
+            '✅ Ansible pipeline SUCCESS' }}
+        Detect: ${{ needs.detect.result }}
+        Validate: ${{ needs.validate.result }}
+        Deploy: ${{ needs.deploy.result }}
+        Review: ${{ needs.review.result }}
+        Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    secrets:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -7,19 +7,6 @@ on:
         required: true
         type: string
 
-  workflow_dispatch:
-    inputs:
-      component:
-        description: "Select component"
-        required: true
-        type: choice
-        default: all
-        options:
-          - all
-          - node-exporter
-          - prometheus
-          - grafana
-
 permissions:
   contents: read
 
@@ -29,87 +16,11 @@ concurrency:
   queue: max
 
 jobs:
-  prepare:
-    runs-on: [self-hosted, linux, ansible-lab]
-
-    outputs:
-      components: ${{ steps.select.outputs.components }}
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Select components
-        id: select
-
-        env:
-          AUTO: ${{ inputs.components }}
-          MANUAL: ${{ inputs.component }}
-
-        run: |
-          set -euo pipefail
-
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-
-            if [[ "$MANUAL" == "all" ]]; then
-              selected=$(jq -c \
-                '.components | keys' \
-                .github/components.json)
-            else
-              selected=$(jq -nc \
-                --arg id "$MANUAL" \
-                '[$id]')
-            fi
-
-          else
-            selected="$AUTO"
-          fi
-
-          jq -e --argjson ids "$selected" '
-            .components as $c
-            | ($ids |
-                type == "array"
-                and length > 0
-                and all(.[];
-                  type == "string" and ($c[.] != null)
-                )
-              )
-          ' .github/components.json > /dev/null
-
-          components=$(jq -c 'unique' <<< "$selected")
-
-          echo "components=$components" >> "$GITHUB_OUTPUT"
-
-  validate:
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main'
-      }}
-
-    uses: ./.github/workflows/validate.yml
-    secrets: inherit
-
   deploy:
-    needs: [prepare, validate]
-
-    if: >-
-      ${{
-        !cancelled() &&
-        github.ref == 'refs/heads/main' &&
-        needs.prepare.result == 'success' &&
-        (
-          github.event_name != 'workflow_dispatch' ||
-          needs.validate.result == 'success'
-        )
-      }}
-
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
-        component: ${{ fromJSON(needs.prepare.outputs.components) }}
+        component: ${{ fromJSON(inputs.components) }}
 
     runs-on: [self-hosted, linux, ansible-lab]
 
@@ -126,26 +37,4 @@ jobs:
           SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
 
         run: |
-          set -euo pipefail
-
-          : "${SSH_KEY:?Missing ANSIBLE_SSH_KEY}"
-
-          umask 077
-
-          key=$(mktemp "$RUNNER_TEMP/ansible-key.XXXXXX")
-          trap 'rm -f "$key"' EXIT
-
-          printf '%s\n' "$SSH_KEY" > "$key"
-
-          export ANSIBLE_PRIVATE_KEY_FILE="$key"
-
-          playbook=$(jq -er \
-            --arg id "$COMPONENT" \
-            '.components[$id].playbook' \
-            ../.github/components.json)
-
-          playbook="${playbook#ansible/}"
-
-          echo "Deploying: $COMPONENT"
-
-          ansible-playbook "$playbook"
+          bash ../.github/scripts/deplioy-component.sh
