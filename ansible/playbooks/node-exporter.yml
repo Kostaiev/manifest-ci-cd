@@ -5,3 +5,5 @@
 
   roles:
     - node_exporter
+  tags:
+    - test
