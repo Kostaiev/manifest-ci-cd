@@ -1,0 +1,16 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    uses: ./.github/workflows/review.yml
+
+  validate:
+    needs: review
+    uses: ./.github/workflows/validate.yml

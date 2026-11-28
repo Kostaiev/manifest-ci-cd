@@ -24,17 +24,53 @@ jobs:
 
     runs-on: [self-hosted, linux, ansible-lab]
 
+    env:
+          COMPONENT: ${{ matrix.component }}
+
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
+      - name: Notify deploy start
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: |
+          MESSAGE="🚀 Deploy started: $COMPONENT"
+          export MESSAGE
+
+          bash .github/scripts/notify-telegram.sh ||
+            echo "::warning::Telegram notification failed"
+
       - name: Deploy component
+        id: deploy
         working-directory: ansible
 
         env:
-          COMPONENT: ${{ matrix.component }}
           SSH_KEY: ${{ secrets.ANSIBLE_SSH_KEY }}
 
         run: |
           bash ../.github/scripts/deplioy-component.sh
+
+      - name: Notify deploy result
+        env:
+          RESULT: ${{ steps.deploy.outcome }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: |
+          if [[ "$RESULT" == "success" ]]; then
+            MESSAGE="✅ Deploy successful: $COMPONENT"
+          else
+            MESSAGE="❌ Deploy failed: $COMPONENT"
+          fi
+
+          MESSAGE+=$'\n'
+          MESSAGE+="Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          export MESSAGE
+
+          bash .github/scripts/notify-telegram.sh ||
+            echo "::warning::Telegram notification failed"

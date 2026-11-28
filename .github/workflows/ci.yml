@@ -34,6 +34,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
   detect:
+    needs: notify-start
     runs-on: ubuntu-24.04
 
     outputs:
@@ -73,6 +74,7 @@ jobs:
           bash .github/scripts/ci-select-components.sh
 
   validate:
+    needs: notify-start
     uses: ./.github/workflows/validate.yml
     secrets: inherit
 
